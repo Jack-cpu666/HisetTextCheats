@@ -23,17 +23,15 @@ socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 
 # --- Global State ---
 client_pc_sid = None
-active_controller_sid = None # NEW: Tracks the current active controller
 
 # --- Authentication ---
 def check_auth(password):
     return password == ACCESS_PASSWORD
 
-# --- HTML Templates ---
+# --- HTML Templates (Unchanged) ---
 LOGIN_HTML = """
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Login</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 flex items-center justify-center h-screen"><div class="bg-white p-8 rounded-lg shadow-md w-full max-w-sm"><h1 class="text-2xl font-semibold text-center text-gray-700 mb-6">Login</h1>{% if error %}<div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4"><span>{{ error }}</span></div>{% endif %}<form method="POST" action="{{ url_for('index') }}"><div class="mb-4"><label for="password" class="block text-gray-700 text-sm font-medium mb-2">Password</label><input type="password" id="password" name="password" required class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"></div><button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-md">Login</button></form></div></body></html>
 """
-
 INTERFACE_HTML = """
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Remote Control</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script><style>html, body { height: 100%; overflow: hidden; } .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; } .status-connected { background-color: #4ade80; } .status-disconnected { background-color: #f87171; } .status-connecting { background-color: #fbbf24; } #main-content { display: flex; flex-direction: column; height: calc(100vh - 3.5rem); } #screen-view-area { flex-grow: 1; display: flex; align-items: center; justify-content: center; background-color: #000; overflow: hidden; transition: height 0.3s ease; } #screen-video { max-width: 100%; max-height: 100%; cursor: crosshair; object-fit: contain; } #text-input-container { height: 0; overflow: hidden; background-color: #f0f4f8; padding: 0; transition: all 0.3s ease; display: flex; flex-direction: column; } #injection-textarea { flex-grow: 1; resize: none; border-radius: 0.25rem; border: 1px solid #ccc; padding: 0.5rem; font-family: monospace; } .control-button { background-color: #3b82f6; color: white; padding: 0.5rem 1rem; border-radius: 0.25rem; transition: background-color 0.2s; } .control-button:hover { background-color: #2563eb; } .control-button.active { background-color: #16a34a; } .control-button.active:hover { background-color: #15803d; } body.text-mode #screen-view-area { height: 50%; } body.text-mode #text-input-container { height: 50%; padding: 1rem; }</style></head><body class="bg-gray-200" tabindex="0"><header class="bg-gray-800 text-white p-3 flex justify-between items-center shadow-md h-14"><h1 class="text-lg font-semibold">Remote Desktop Control</h1><div class="flex items-center space-x-4"><button id="toggle-text-mode" class="control-button">Text Input</button><div id="connection-status" class="flex items-center text-sm"><span id="status-dot" class="status-dot status-connecting"></span><span id="status-text">Connecting...</span></div><a href="{{ url_for('logout') }}" class="bg-red-600 hover:bg-red-700 text-white text-xs font-medium py-1 px-2 rounded-md">Logout</a></div></header><main id="main-content"><div id="screen-view-area"><video id="screen-video" autoplay playsinline></video></div><div id="text-input-container"><textarea id="injection-textarea" placeholder="Paste or type text here. Client will type this on F2 press."></textarea><div class="flex justify-end items-center mt-2"><span id="injection-status" class="text-sm text-green-600 mr-4"></span><button id="send-text-button" class="control-button">Send Text to Client</button></div></div></main><script>
 document.addEventListener('DOMContentLoaded', () => {
@@ -41,18 +39,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let pc = null; let remoteDimensions = { width: 1920, height: 1080 };
     function updateStatus(s, msg) { statusText.textContent = msg; statusDot.className = `status-dot ${s}`; }
     function closeConnection() { if (pc) { pc.close(); pc = null; } screenVideo.srcObject = null; }
-    async function createPeerConnection() {
-        closeConnection();
-        const pcConfig = {iceServers: [{ urls: 'stun:stun.l.google.com:19302' },{ urls: "turn:numb.viagenie.ca", username: "webrtc@live.com", credential: "muazkh" }]};
-        pc = new RTCPeerConnection(pcConfig);
-        pc.onicecandidate = e => { if (e.candidate) socket.emit('webrtc_ice_candidate', { candidate: e.candidate.toJSON() }); };
-        pc.ontrack = e => { if (screenVideo.srcObject !== e.streams[0]) screenVideo.srcObject = e.streams[0]; };
-        pc.onconnectionstatechange = () => { if(pc.connectionState === 'connected') { updateStatus('status-connected', 'Remote PC Connected'); } else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) { updateStatus('status-disconnected', 'Video Disconnected'); }};
-    }
+    async function createPeerConnection() { closeConnection(); const pcConfig = {iceServers: [{ urls: 'stun:stun.l.google.com:19302' },{ urls: "turn:numb.viagenie.ca", username: "webrtc@live.com", credential: "muazkh" }]}; pc = new RTCPeerConnection(pcConfig); pc.onicecandidate = e => { if (e.candidate) socket.emit('webrtc_ice_candidate', { candidate: e.candidate.toJSON() }); }; pc.ontrack = e => { if (screenVideo.srcObject !== e.streams[0]) screenVideo.srcObject = e.streams[0]; }; pc.onconnectionstatechange = () => { if(pc.connectionState === 'connected') updateStatus('status-connected', 'Remote PC Connected'); else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) updateStatus('status-disconnected', 'Video Disconnected'); }; }
     socket.on('connect', () => { updateStatus('status-connecting', 'Server connected...'); socket.emit('controller_ready'); });
     socket.on('disconnect', () => { updateStatus('status-disconnected', 'Server disconnected'); closeConnection(); });
     socket.on('client_disconnected', () => { updateStatus('status-disconnected', 'Remote PC Disconnected'); closeConnection(); });
-    socket.on('force_disconnect', () => { alert('Another user has taken control. Your session is now disconnected.'); closeConnection(); updateStatus('status-disconnected', 'Session taken over'); });
     socket.on('webrtc_offer', async (data) => { await createPeerConnection(); await pc.setRemoteDescription(new RTCSessionDescription(data.offer)); const answer = await pc.createAnswer(); await pc.setLocalDescription(answer); socket.emit('webrtc_answer', { answer: pc.localDescription.toJSON() }); });
     socket.on('webrtc_ice_candidate', (data) => { if (pc && data.candidate) pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => {}); });
     function sendControl(cmd) { if (socket.connected) socket.emit('control_command', cmd); }
@@ -91,23 +81,22 @@ def logout():
     session.pop('authenticated', None)
     return redirect(url_for('index'))
 
-# --- SocketIO Event Handlers ---
+# --- SocketIO Handlers ---
 @socketio.on('connect')
 def handle_connect():
-    if not session.get('authenticated'):
-        return # Don't handle connections from non-logged-in users
-    logger.info(f"Controller connected: {request.sid}")
+    if session.get('authenticated'):
+        logger.info(f"Controller connected: {request.sid}")
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    global active_controller_sid
     if request.sid == client_pc_sid:
         logger.warning("Remote PC disconnected.")
         client_pc_sid = None
         emit('client_disconnected', broadcast=True, include_self=False)
-    elif request.sid == active_controller_sid:
-        logger.info(f"Active controller {request.sid} disconnected.")
-        active_controller_sid = None
+    else: # It's a controller
+        logger.info(f"Controller {request.sid} disconnected.")
+        if client_pc_sid:
+            emit('controller_disconnected', {'sid': request.sid}, room=client_pc_sid)
 
 @socketio.on('register_client')
 def handle_register_client(data):
@@ -115,53 +104,44 @@ def handle_register_client(data):
     if data.get('token') == ACCESS_PASSWORD:
         client_pc_sid = request.sid
         logger.info(f"Remote PC registered: {client_pc_sid}")
-        # Notify any waiting controllers that the PC is now online
-        emit('client_connected', data, broadcast=True, include_self=False)
+        emit('client_ready', broadcast=True)
 
-# --- NEW TAKEOVER LOGIC ---
 @socketio.on('controller_ready')
 def handle_controller_ready():
-    global active_controller_sid
-    if not session.get('authenticated'): return
+    if session.get('authenticated') and client_pc_sid:
+        logger.info(f"Controller {request.sid} is ready, telling PC to start a new connection for them.")
+        emit('start_webrtc_for_controller', {'sid': request.sid}, room=client_pc_sid)
 
-    new_controller_sid = request.sid
-    logger.info(f"Controller {new_controller_sid} is ready.")
-
-    # If there's already an active controller, kick them.
-    if active_controller_sid and active_controller_sid != new_controller_sid:
-        logger.warning(f"Kicking old controller {active_controller_sid} for new one {new_controller_sid}.")
-        emit('force_disconnect', {'message': 'Another user has taken control.'}, room=active_controller_sid)
-
-    # Set the new active controller
-    active_controller_sid = new_controller_sid
-    
-    # If the client PC is online, tell it to start a new WebRTC session
-    if client_pc_sid:
-        logger.info(f"Telling client PC {client_pc_sid} to start WebRTC for controller {active_controller_sid}.")
-        emit('start_webrtc', room=client_pc_sid)
-
-# --- WebRTC and Command Handlers (with active_controller_sid check) ---
-@socketio.on('control_command')
-def handle_control_command(data):
-    if request.sid == active_controller_sid and client_pc_sid:
-        emit('command', data, room=client_pc_sid)
+# --- Universal Relay Handlers ---
 @socketio.on('webrtc_offer')
 def handle_webrtc_offer(data):
-    if request.sid == client_pc_sid and active_controller_sid:
-        emit('webrtc_offer', data, room=active_controller_sid)
+    # Relay offer from client to a specific controller
+    if request.sid == client_pc_sid and 'to_sid' in data:
+        emit('webrtc_offer', {'offer': data['offer']}, room=data['to_sid'])
+
 @socketio.on('webrtc_answer')
 def handle_webrtc_answer(data):
-    if request.sid == active_controller_sid and client_pc_sid:
-        emit('webrtc_answer', data, room=client_pc_sid)
+    # Relay answer from a controller back to the client
+    if client_pc_sid:
+        emit('webrtc_answer', {'answer': data['answer'], 'from_sid': request.sid}, room=client_pc_sid)
+
 @socketio.on('webrtc_ice_candidate')
 def handle_webrtc_ice_candidate(data):
-    if request.sid == client_pc_sid and active_controller_sid:
-        emit('webrtc_ice_candidate', data, room=active_controller_sid)
-    elif request.sid == active_controller_sid and client_pc_sid:
-        emit('webrtc_ice_candidate', data, room=client_pc_sid)
+    # Relay ICE from controller to client
+    if client_pc_sid and 'from_sid' not in data:
+        emit('webrtc_ice_candidate', {'candidate': data['candidate'], 'from_sid': request.sid}, room=client_pc_sid)
+    # Relay ICE from client to controller
+    elif 'to_sid' in data:
+        emit('webrtc_ice_candidate', {'candidate': data['candidate']}, room=data['to_sid'])
+
+# --- Universal Command Handlers ---
+@socketio.on('control_command')
+def handle_control_command(data):
+    if client_pc_sid:
+        emit('command', data, room=client_pc_sid)
 @socketio.on('set_injection_text')
 def handle_set_injection_text(data):
-    if request.sid == active_controller_sid and client_pc_sid:
+    if client_pc_sid:
         emit('receive_injection_text', data, room=client_pc_sid)
         emit('text_injection_ack', {'status': 'success'}, room=request.sid)
 
