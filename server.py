@@ -25,276 +25,365 @@ socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 client_pc_sid = None
 client_pc_dimensions = {'width': 1920, 'height': 1080}
 
-# --- Authentication ---
-def check_auth(password):
-    return password == ACCESS_PASSWORD
-
-# --- HTML Templates ---
-LOGIN_HTML = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Login</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 flex items-center justify-center h-screen"><div class="bg-white p-8 rounded-lg shadow-md w-full max-w-sm"><h1 class="text-2xl font-semibold text-center text-gray-700 mb-6">Login</h1>{% if error %}<div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4"><span>{{ error }}</span></div>{% endif %}<form method="POST" action="{{ url_for('index') }}"><div class="mb-4"><label for="password" class="block text-gray-700 text-sm font-medium mb-2">Password</label><input type="password" id="password" name="password" required class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"></div><button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-md">Login</button></form></div></body></html>
-"""
-
-INTERFACE_HTML = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Remote Control</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script><style>html, body { height: 100%; overflow: hidden; } .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; } .status-connected { background-color: #4ade80; } .status-disconnected { background-color: #f87171; } .status-connecting { background-color: #fbbf24; } #main-content { display: flex; flex-direction: column; height: calc(100vh - 3.5rem); } #screen-view-area { flex-grow: 1; display: flex; align-items: center; justify-content: center; background-color: #000; overflow: hidden; transition: height 0.3s ease; position: relative; } #screen-video { max-width: 100%; max-height: 100%; cursor: crosshair; object-fit: contain; } #debug-info { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); color: white; padding: 5px; font-size: 12px; border-radius: 3px; } #text-input-container { height: 0; overflow: hidden; background-color: #f0f4f8; padding: 0; transition: all 0.3s ease; display: flex; flex-direction: column; } #injection-textarea { flex-grow: 1; resize: none; border-radius: 0.25rem; border: 1px solid #ccc; padding: 0.5rem; font-family: monospace; } .control-button { background-color: #3b82f6; color: white; padding: 0.5rem 1rem; border-radius: 0.25rem; transition: background-color 0.2s; } .control-button:hover { background-color: #2563eb; } .control-button.active { background-color: #16a34a; } .control-button.active:hover { background-color: #15803d; } body.text-mode #screen-view-area { height: 50%; } body.text-mode #text-input-container { height: 50%; padding: 1rem; }</style></head><body class="bg-gray-200" tabindex="0"><header class="bg-gray-800 text-white p-3 flex justify-between items-center shadow-md h-14"><h1 class="text-lg font-semibold">Remote Desktop Control</h1><div class="flex items-center space-x-4"><button id="toggle-text-mode" class="control-button">Text Input</button><div id="connection-status" class="flex items-center text-sm"><span id="status-dot" class="status-dot status-connecting"></span><span id="status-text">Connecting...</span></div><a href="{{ url_for('logout') }}" class="bg-red-600 hover:bg-red-700 text-white text-xs font-medium py-1 px-2 rounded-md">Logout</a></div></header><main id="main-content"><div id="screen-view-area"><video id="screen-video" autoplay playsinline muted></video><div id="debug-info">Debug: Initializing...</div></div><div id="text-input-container"><textarea id="injection-textarea" placeholder="Paste or type text here. Client will type this on F2 press."></textarea><div class="flex justify-end items-center mt-2"><span id="injection-status" class="text-sm text-green-600 mr-4"></span><button id="send-text-button" class="control-button">Send Text to Client</button></div></div></main><script>
-document.addEventListener('DOMContentLoaded', () => {
-    const socket = io(); 
-    const body = document.body; 
-    const screenViewArea = document.getElementById('screen-view-area'); 
-    const screenVideo = document.getElementById('screen-video'); 
-    const statusText = document.getElementById('status-text'); 
-    const statusDot = document.getElementById('status-dot'); 
-    const toggleTextModeBtn = document.getElementById('toggle-text-mode'); 
-    const injectionTextarea = document.getElementById('injection-textarea'); 
-    const sendTextBtn = document.getElementById('send-text-button'); 
-    const injectionStatus = document.getElementById('injection-status');
-    const debugInfo = document.getElementById('debug-info');
+# --- HTML Template (No Authentication Required) ---
+PUBLIC_INTERFACE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Public Remote Screen</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+    <style>
+        html, body { height: 100%; overflow: hidden; }
+        .status-dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+        .status-connected { background-color: #4ade80; }
+        .status-disconnected { background-color: #f87171; }
+        .status-connecting { background-color: #fbbf24; }
+        #main-content { display: flex; flex-direction: column; height: 100vh; }
+        #screen-view-area { 
+            flex-grow: 1; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            background-color: #000; 
+            overflow: hidden; 
+            position: relative; 
+        }
+        #screen-video { 
+            max-width: 100%; 
+            max-height: 100%; 
+            cursor: crosshair; 
+            object-fit: contain; 
+        }
+        #debug-panel { 
+            position: absolute; 
+            top: 10px; 
+            left: 10px; 
+            background: rgba(0,0,0,0.8); 
+            color: white; 
+            padding: 10px; 
+            font-size: 12px; 
+            border-radius: 5px; 
+            max-width: 300px;
+            z-index: 1000;
+        }
+        #header { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            color: white; 
+            padding: 15px; 
+            text-align: center; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .connection-info {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .retry-button {
+            background: #ef4444;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .retry-button:hover {
+            background: #dc2626;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1 class="text-2xl font-bold">🖥️ Remote Screen Viewer</h1>
+        <div class="connection-info">
+            <span id="status-dot" class="status-dot status-connecting"></span>
+            <span id="status-text">Connecting...</span>
+            <button id="retry-btn" class="retry-button" onclick="retryConnection()">Retry</button>
+        </div>
+    </div>
     
-    let pc = null; 
+    <div id="main-content">
+        <div id="screen-view-area">
+            <video id="screen-video" autoplay playsinline muted></video>
+            <div id="debug-panel">
+                <div><strong>Debug Info:</strong></div>
+                <div id="debug-info">Initializing...</div>
+                <div id="webrtc-state">WebRTC: Not started</div>
+                <div id="ice-state">ICE: Not started</div>
+                <div id="video-state">Video: Not loaded</div>
+                <hr style="margin: 10px 0;">
+                <div id="error-log"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    let socket;
+    let pc = null;
     let remoteDimensions = { width: 1920, height: 1080 };
     let connectionAttempts = 0;
+    let isRetrying = false;
     
-    function updateStatus(s, msg) { 
-        statusText.textContent = msg; 
-        statusDot.className = `status-dot ${s}`; 
-        updateDebugInfo(`Status: ${msg}`);
-    }
+    const statusText = document.getElementById('status-text');
+    const statusDot = document.getElementById('status-dot');
+    const screenVideo = document.getElementById('screen-video');
+    const debugInfo = document.getElementById('debug-info');
+    const webrtcState = document.getElementById('webrtc-state');
+    const iceState = document.getElementById('ice-state');
+    const videoState = document.getElementById('video-state');
+    const errorLog = document.getElementById('error-log');
     
-    function updateDebugInfo(msg) {
-        debugInfo.textContent = msg;
-        console.log(msg);
-    }
-    
-    function closeConnection() { 
-        if (pc) { 
-            pc.close(); 
-            pc = null; 
-        } 
-        screenVideo.srcObject = null; 
-        updateDebugInfo('Connection closed');
-    }
-    
-    async function createPeerConnection() { 
-        closeConnection(); 
-        connectionAttempts++;
-        updateDebugInfo(`Creating peer connection (attempt ${connectionAttempts})`);
+    function log(message) {
+        console.log(message);
+        debugInfo.textContent = message;
         
-        // Enhanced ICE server configuration
-        const pcConfig = {
+        // Add to error log if it's an error
+        if (message.includes('Error') || message.includes('Failed')) {
+            errorLog.innerHTML = `<div style="color: #ff6b6b; font-size: 11px; margin-top: 5px;">${message}</div>`;
+        }
+    }
+    
+    function updateStatus(statusClass, message) {
+        statusText.textContent = message;
+        statusDot.className = `status-dot ${statusClass}`;
+        log(`Status: ${message}`);
+    }
+    
+    function retryConnection() {
+        if (isRetrying) return;
+        isRetrying = true;
+        
+        log('Retrying connection...');
+        closeConnection();
+        
+        setTimeout(() => {
+            initializeConnection();
+            isRetrying = false;
+        }, 1000);
+    }
+    
+    function closeConnection() {
+        if (pc) {
+            pc.close();
+            pc = null;
+        }
+        if (socket) {
+            socket.disconnect();
+        }
+        screenVideo.srcObject = null;
+        webrtcState.textContent = 'WebRTC: Closed';
+        iceState.textContent = 'ICE: Closed';
+        videoState.textContent = 'Video: Closed';
+    }
+    
+    async function createPeerConnection() {
+        closeConnection();
+        connectionAttempts++;
+        log(`Creating WebRTC connection (attempt ${connectionAttempts})`);
+        
+        const config = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
                 { 
-                    urls: "turn:numb.viagenie.ca", 
-                    username: "webrtc@live.com", 
-                    credential: "muazkh" 
+                    urls: 'turn:numb.viagenie.ca:3478',
+                    username: 'webrtc@live.com',
+                    credential: 'muazkh'
                 },
                 {
-                    urls: "turn:relay.metered.ca:80",
-                    username: "85d4fae4a3569d1a11e09a7a",
-                    credential: "JZEOEt2V3Qb0y27GRntt2u2PAYA="
-                },
-                {
-                    urls: "turn:relay.metered.ca:443",
-                    username: "85d4fae4a3569d1a11e09a7a",
-                    credential: "JZEOEt2V3Qb0y27GRntt2u2PAYA="
+                    urls: 'turn:relay.metered.ca:80',
+                    username: '85d4fae4a3569d1a11e09a7a',
+                    credential: 'JZEOEt2V3Qb0y27GRntt2u2PAYA='
                 }
             ],
-            iceCandidatePoolSize: 10,
-            bundlePolicy: 'max-bundle',
-            rtcpMuxPolicy: 'require'
+            iceCandidatePoolSize: 10
         };
         
-        pc = new RTCPeerConnection(pcConfig); 
+        pc = new RTCPeerConnection(config);
+        webrtcState.textContent = 'WebRTC: Creating...';
         
-        pc.onicecandidate = e => { 
-            if (e.candidate) {
-                updateDebugInfo(`Sending ICE candidate: ${e.candidate.candidate.substring(0, 50)}...`);
-                socket.emit('webrtc_ice_candidate', { candidate: e.candidate.toJSON() }); 
-            }
-        }; 
-        
-        pc.ontrack = e => { 
-            updateDebugInfo(`Received track: ${e.track.kind}`);
-            if (e.track.kind === 'video') {
-                if (screenVideo.srcObject !== e.streams[0]) {
-                    screenVideo.srcObject = e.streams[0];
-                    updateDebugInfo('Video stream connected');
-                }
-            }
-        }; 
-        
-        pc.onconnectionstatechange = () => { 
-            updateDebugInfo(`Connection state: ${pc.connectionState}`);
-            if(pc.connectionState === 'connected') {
-                updateStatus('status-connected', 'Remote PC Connected');
-                updateDebugInfo('WebRTC connected successfully');
-            } else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
-                updateStatus('status-disconnected', 'Video Disconnected');
-                updateDebugInfo(`Connection failed: ${pc.connectionState}`);
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                log(`Sending ICE candidate: ${event.candidate.candidate.substring(0, 30)}...`);
+                socket.emit('webrtc_ice_candidate', { candidate: event.candidate.toJSON() });
             }
         };
         
-        pc.onicecandidateerror = (e) => {
-            updateDebugInfo(`ICE candidate error: ${e.errorText}`);
+        pc.ontrack = (event) => {
+            log(`Received ${event.track.kind} track`);
+            if (event.track.kind === 'video') {
+                screenVideo.srcObject = event.streams[0];
+                videoState.textContent = 'Video: Stream received';
+            }
+        };
+        
+        pc.onconnectionstatechange = () => {
+            const state = pc.connectionState;
+            webrtcState.textContent = `WebRTC: ${state}`;
+            log(`WebRTC connection state: ${state}`);
+            
+            if (state === 'connected') {
+                updateStatus('status-connected', 'Connected! 🎉');
+                videoState.textContent = 'Video: Connected';
+            } else if (state === 'failed') {
+                updateStatus('status-disconnected', 'Connection failed 😞');
+                setTimeout(retryConnection, 2000);
+            } else if (state === 'disconnected') {
+                updateStatus('status-disconnected', 'Disconnected');
+            }
         };
         
         pc.oniceconnectionstatechange = () => {
-            updateDebugInfo(`ICE connection state: ${pc.iceConnectionState}`);
+            const state = pc.iceConnectionState;
+            iceState.textContent = `ICE: ${state}`;
+            log(`ICE connection state: ${state}`);
         };
         
         pc.onicegatheringstatechange = () => {
-            updateDebugInfo(`ICE gathering state: ${pc.iceGatheringState}`);
+            log(`ICE gathering state: ${pc.iceGatheringState}`);
+        };
+        
+        pc.onicecandidateerror = (event) => {
+            log(`ICE candidate error: ${event.errorText}`);
         };
     }
     
-    socket.on('connect', () => { 
-        updateStatus('status-connecting', 'Server connected...'); 
-        socket.emit('controller_ready'); 
+    function initializeConnection() {
+        socket = io();
+        
+        socket.on('connect', () => {
+            updateStatus('status-connecting', 'Server connected, waiting for screen...');
+            socket.emit('viewer_ready');
+        });
+        
+        socket.on('disconnect', () => {
+            updateStatus('status-disconnected', 'Server disconnected');
+        });
+        
+        socket.on('client_disconnected', () => {
+            updateStatus('status-disconnected', 'Remote PC disconnected');
+            closeConnection();
+        });
+        
+        socket.on('webrtc_offer', async (data) => {
+            try {
+                log('Received WebRTC offer');
+                await createPeerConnection();
+                
+                await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                
+                socket.emit('webrtc_answer', { answer: pc.localDescription.toJSON() });
+                log('Sent WebRTC answer');
+            } catch (error) {
+                log(`Error handling offer: ${error.message}`);
+            }
+        });
+        
+        socket.on('webrtc_ice_candidate', async (data) => {
+            if (pc && data.candidate) {
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    log('Added ICE candidate');
+                } catch (error) {
+                    log(`Error adding ICE candidate: ${error.message}`);
+                }
+            }
+        });
+        
+        socket.on('error', (error) => {
+            log(`Socket error: ${error}`);
+        });
+    }
+    
+    // Video event listeners
+    screenVideo.addEventListener('loadstart', () => {
+        videoState.textContent = 'Video: Loading...';
+        log('Video started loading');
     });
     
-    socket.on('disconnect', () => { 
-        updateStatus('status-disconnected', 'Server disconnected'); 
-        closeConnection(); 
+    screenVideo.addEventListener('loadedmetadata', () => {
+        videoState.textContent = 'Video: Metadata loaded';
+        log('Video metadata loaded');
     });
     
-    socket.on('client_disconnected', () => { 
-        updateStatus('status-disconnected', 'Remote PC Disconnected'); 
-        closeConnection(); 
+    screenVideo.addEventListener('canplay', () => {
+        videoState.textContent = 'Video: Can play';
+        log('Video can play');
     });
     
-    socket.on('webrtc_offer', async (data) => { 
-        updateDebugInfo('Received WebRTC offer');
-        await createPeerConnection(); 
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer)); 
-        const answer = await pc.createAnswer(); 
-        await pc.setLocalDescription(answer); 
-        socket.emit('webrtc_answer', { answer: pc.localDescription.toJSON() }); 
-        updateDebugInfo('Sent WebRTC answer');
+    screenVideo.addEventListener('play', () => {
+        videoState.textContent = 'Video: Playing';
+        log('Video is playing');
     });
     
-    socket.on('webrtc_ice_candidate', (data) => { 
-        if (pc && data.candidate) {
-            pc.addIceCandidate(new RTCIceCandidate(data.candidate))
-                .then(() => updateDebugInfo('Added ICE candidate'))
-                .catch(e => updateDebugInfo(`ICE candidate error: ${e}`)); 
+    screenVideo.addEventListener('error', (e) => {
+        videoState.textContent = 'Video: Error';
+        log(`Video error: ${e.error?.message || 'Unknown error'}`);
+    });
+    
+    // Mouse control
+    document.getElementById('screen-view-area').addEventListener('mousemove', (e) => {
+        const rect = screenVideo.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+        
+        const x = Math.round((e.offsetX / rect.width) * remoteDimensions.width);
+        const y = Math.round((e.offsetY / rect.height) * remoteDimensions.height);
+        
+        if (socket && socket.connected) {
+            socket.emit('control_command', { action: 'move', x, y });
         }
     });
     
-    // Add video event listeners for debugging
-    screenVideo.addEventListener('loadstart', () => updateDebugInfo('Video load started'));
-    screenVideo.addEventListener('loadedmetadata', () => updateDebugInfo('Video metadata loaded'));
-    screenVideo.addEventListener('loadeddata', () => updateDebugInfo('Video data loaded'));
-    screenVideo.addEventListener('canplay', () => updateDebugInfo('Video can play'));
-    screenVideo.addEventListener('play', () => updateDebugInfo('Video playing'));
-    screenVideo.addEventListener('error', (e) => updateDebugInfo(`Video error: ${e.error?.message || 'Unknown'}`));
-    
-    function sendControl(cmd) { 
-        if (socket.connected) socket.emit('control_command', cmd); 
-    }
-    
-    function getRemoteCoords(e) { 
-        const r = screenVideo.getBoundingClientRect(); 
-        if (r.width === 0 || r.height === 0) return null; 
-        return { 
-            x: Math.round((e.offsetX / r.width) * remoteDimensions.width), 
-            y: Math.round((e.offsetY / r.height) * remoteDimensions.height)
-        }; 
-    }
-    
-    screenViewArea.addEventListener('mousemove', e => { 
-        const c = getRemoteCoords(e); 
-        if (c) sendControl({ action: 'move', ...c }); 
-    }); 
-    
-    screenViewArea.addEventListener('click', e => { 
-        const c = getRemoteCoords(e); 
-        if (c) sendControl({ action: 'click', button: 'left', ...c }); 
-    }); 
-    
-    screenViewArea.addEventListener('contextmenu', e => { 
-        e.preventDefault(); 
-        const c = getRemoteCoords(e); 
-        if (c) sendControl({ action: 'click', button: 'right', ...c }); 
-    }); 
-    
-    screenViewArea.addEventListener('wheel', e => { 
-        e.preventDefault(); 
-        const dY = e.deltaY > 0 ? 1 : (e.deltaY < 0 ? -1 : 0); 
-        const dX = e.deltaX > 0 ? 1 : (e.deltaX < 0 ? -1 : 0); 
-        if (dY || dX) sendControl({ action: 'scroll', dx: dX, dy: dY }); 
+    document.getElementById('screen-view-area').addEventListener('click', (e) => {
+        const rect = screenVideo.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+        
+        const x = Math.round((e.offsetX / rect.width) * remoteDimensions.width);
+        const y = Math.round((e.offsetY / rect.height) * remoteDimensions.height);
+        
+        if (socket && socket.connected) {
+            socket.emit('control_command', { action: 'click', button: 'left', x, y });
+        }
     });
     
-    document.body.addEventListener('keydown', e => { 
-        if(body.classList.contains('text-mode') && e.target === injectionTextarea) return; 
-        e.preventDefault(); 
-        sendControl({ action: 'keydown', key: e.key, code: e.code }); 
+    // Keyboard control
+    document.addEventListener('keydown', (e) => {
+        if (socket && socket.connected) {
+            e.preventDefault();
+            socket.emit('control_command', { action: 'keydown', key: e.key, code: e.code });
+        }
     });
     
-    document.body.addEventListener('keyup', e => { 
-        if(body.classList.contains('text-mode') && e.target === injectionTextarea) return; 
-        e.preventDefault(); 
-        sendControl({ action: 'keyup', key: e.key, code: e.code }); 
+    document.addEventListener('keyup', (e) => {
+        if (socket && socket.connected) {
+            e.preventDefault();
+            socket.emit('control_command', { action: 'keyup', key: e.key, code: e.code });
+        }
     });
     
-    toggleTextModeBtn.addEventListener('click', () => { 
-        body.classList.toggle('text-mode'); 
-        toggleTextModeBtn.classList.toggle('active'); 
-        if (body.classList.contains('text-mode')) injectionTextarea.focus(); 
-        else document.body.focus(); 
-    });
-    
-    sendTextBtn.addEventListener('click', () => { 
-        const text = injectionTextarea.value; 
-        socket.emit('set_injection_text', { text: text }); 
-        injectionStatus.textContent = "Sending..."; 
-    });
-    
-    socket.on('text_injection_ack', (data) => { 
-        if (data.status === 'success') { 
-            injectionStatus.textContent = "Text saved on client!"; 
-        } else { 
-            injectionStatus.textContent = `Error: ${data.message}`; 
-        } 
-        setTimeout(() => { 
-            injectionStatus.textContent = ''; 
-        }, 3000); 
-    });
-});
-</script></body></html>
+    // Initialize on page load
+    initializeConnection();
+    </script>
+</body>
+</html>
 """
 
 # --- Flask Routes ---
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/')
 def index():
-    if request.method == 'POST':
-        if check_auth(request.form.get('password')):
-            session['authenticated'] = True
-            return redirect(url_for('interface'))
-        else:
-            return render_template_string(LOGIN_HTML, error="Invalid password")
-    if session.get('authenticated'):
-        return redirect(url_for('interface'))
-    return render_template_string(LOGIN_HTML)
-
-@app.route('/interface')
-def interface():
-    if not session.get('authenticated'):
-        return redirect(url_for('index'))
-    return render_template_string(INTERFACE_HTML)
-
-@app.route('/logout')
-def logout():
-    session.pop('authenticated', None)
-    return redirect(url_for('index'))
+    return render_template_string(PUBLIC_INTERFACE_HTML)
 
 # --- SocketIO Event Handlers ---
 @socketio.on('connect')
 def handle_connect():
-    if session.get('authenticated'):
-        logger.info(f"Controller connected: {request.sid}")
-    else:
-        logger.info(f"Client attempting to connect: {request.sid}")
+    logger.info(f"Client connected: {request.sid}")
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -304,7 +393,7 @@ def handle_disconnect():
         client_pc_sid = None
         emit('client_disconnected', broadcast=True, include_self=False)
     else:
-        logger.info(f"Controller {request.sid} disconnected.")
+        logger.info(f"Viewer {request.sid} disconnected.")
         if client_pc_sid:
             emit('controller_disconnected', {'sid': request.sid}, room=client_pc_sid)
 
@@ -319,55 +408,44 @@ def handle_register_client(data):
     else:
         logger.warning(f"Failed registration attempt from SID {request.sid}")
 
-@socketio.on('controller_ready')
-def handle_controller_ready():
-    if session.get('authenticated') and client_pc_sid:
-        logger.info(f"Controller {request.sid} is ready, telling PC to start a new connection for them.")
+@socketio.on('viewer_ready')
+def handle_viewer_ready():
+    logger.info(f"Viewer {request.sid} is ready")
+    if client_pc_sid:
+        logger.info(f"Telling PC to start WebRTC for viewer {request.sid}")
         emit('start_webrtc_for_controller', {'sid': request.sid}, room=client_pc_sid)
     else:
-        logger.warning(f"Controller {request.sid} ready but no PC connected or not authenticated")
+        logger.warning(f"Viewer {request.sid} ready but no PC connected")
 
-# --- Enhanced WebRTC Relay Handlers ---
+# --- WebRTC Relay Handlers ---
 @socketio.on('webrtc_offer')
 def handle_webrtc_offer(data):
     if request.sid == client_pc_sid and 'to_sid' in data:
-        logger.info(f"Relaying WebRTC offer from PC to controller {data['to_sid']}")
+        logger.info(f"Relaying WebRTC offer from PC to viewer {data['to_sid']}")
         emit('webrtc_offer', {'offer': data['offer']}, room=data['to_sid'])
-    else:
-        logger.warning(f"Invalid WebRTC offer from {request.sid}")
 
 @socketio.on('webrtc_answer')
 def handle_webrtc_answer(data):
-    if client_pc_sid and session.get('authenticated'):
-        logger.info(f"Relaying WebRTC answer from controller {request.sid} to PC")
+    if client_pc_sid:
+        logger.info(f"Relaying WebRTC answer from viewer {request.sid} to PC")
         emit('webrtc_answer', {'answer': data['answer'], 'from_sid': request.sid}, room=client_pc_sid)
-    else:
-        logger.warning(f"Invalid WebRTC answer from {request.sid}")
 
 @socketio.on('webrtc_ice_candidate')
 def handle_webrtc_ice_candidate(data):
     if client_pc_sid and 'from_sid' not in data:
-        # From controller to PC
-        logger.info(f"Relaying ICE candidate from controller {request.sid} to PC")
+        # From viewer to PC
+        logger.info(f"Relaying ICE candidate from viewer {request.sid} to PC")
         emit('webrtc_ice_candidate', {'candidate': data['candidate'], 'from_sid': request.sid}, room=client_pc_sid)
     elif 'to_sid' in data:
-        # From PC to controller
-        logger.info(f"Relaying ICE candidate from PC to controller {data['to_sid']}")
+        # From PC to viewer
+        logger.info(f"Relaying ICE candidate from PC to viewer {data['to_sid']}")
         emit('webrtc_ice_candidate', {'candidate': data['candidate']}, room=data['to_sid'])
-    else:
-        logger.warning(f"Invalid ICE candidate from {request.sid}")
 
 # --- Command Handlers ---
 @socketio.on('control_command')
 def handle_control_command(data):
-    if client_pc_sid and session.get('authenticated'):
+    if client_pc_sid:
         emit('command', data, room=client_pc_sid)
-
-@socketio.on('set_injection_text')
-def handle_set_injection_text(data):
-    if client_pc_sid and session.get('authenticated'):
-        emit('receive_injection_text', data, room=client_pc_sid)
-        emit('text_injection_ack', {'status': 'success'}, room=request.sid)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
