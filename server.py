@@ -28,7 +28,7 @@ client_pc_sid = None
 def check_auth(password):
     return password == ACCESS_PASSWORD
 
-# --- HTML Templates (Unchanged from before) ---
+# --- HTML Templates ---
 LOGIN_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -51,6 +51,7 @@ LOGIN_HTML = """
 </body>
 </html>
 """
+
 INTERFACE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -116,8 +117,6 @@ INTERFACE_HTML = """
 """
 
 # --- Flask Routes ---
-
-# **THE FIX IS HERE:** Added methods=['GET', 'POST'] to the decorator
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -127,51 +126,76 @@ def index():
         else:
             return render_template_string(LOGIN_HTML, error="Invalid password")
     
-    # This handles the GET request
-    return render_template_string(LOGIN_HTML) if not session.get('authenticated') else redirect(url_for('interface'))
+    if session.get('authenticated'):
+        return redirect(url_for('interface'))
+    return render_template_string(LOGIN_HTML)
 
 @app.route('/interface')
 def interface():
-    return render_template_string(INTERFACE_HTML) if session.get('authenticated') else redirect(url_for('index'))
+    if not session.get('authenticated'):
+        return redirect(url_for('index'))
+    return render_template_string(INTERFACE_HTML)
 
 @app.route('/logout')
 def logout():
     session.pop('authenticated', None)
     return redirect(url_for('index'))
 
-# --- SocketIO Event Handlers (Unchanged) ---
+# --- SocketIO Event Handlers ---
 @socketio.on('connect')
 def handle_connect():
-    if session.get('authenticated') and client_pc_sid: emit('client_connected', {}, room=request.sid)
+    if session.get('authenticated') and client_pc_sid:
+        emit('client_connected', {}, room=request.sid)
+
 @socketio.on('disconnect')
 def handle_disconnect():
     global client_pc_sid
-    if request.sid == client_pc_sid: client_pc_sid = None; emit('client_disconnected', broadcast=True, include_self=False)
+    if request.sid == client_pc_sid:
+        logger.warning(f"Remote PC (SID: {client_pc_sid}) disconnected.")
+        client_pc_sid = None
+        emit('client_disconnected', broadcast=True, include_self=False)
+
 @socketio.on('register_client')
 def handle_register_client(data):
     global client_pc_sid
-    if data.get('token') == ACCESS_PASSWORD: client_pc_sid = request.sid; emit('client_connected', data, broadcast=True, include_self=False)
+    if data.get('token') == ACCESS_PASSWORD:
+        client_pc_sid = request.sid
+        logger.info(f"Remote PC registered: SID {client_pc_sid}")
+        emit('client_connected', data, broadcast=True, include_self=False)
+    else:
+        logger.warning(f"Failed registration attempt from SID {request.sid}")
+
 @socketio.on('control_command')
 def handle_control_command(data):
-    if session.get('authenticated') and client_pc_sid: emit('command', data, room=client_pc_sid)
+    if session.get('authenticated') and client_pc_sid:
+        emit('command', data, room=client_pc_sid)
+
 @socketio.on('controller_ready')
 def handle_controller_ready():
-    if session.get('authenticated') and client_pc_sid: emit('start_webrtc', room=client_pc_sid)
+    if session.get('authenticated') and client_pc_sid:
+        emit('start_webrtc', room=client_pc_sid)
+
 @socketio.on('webrtc_offer')
 def handle_webrtc_offer(data):
-    if request.sid == client_pc_sid: emit('webrtc_offer', data, broadcast=True, include_self=False)
+    if request.sid == client_pc_sid:
+        emit('webrtc_offer', data, broadcast=True, include_self=False)
+
 @socketio.on('webrtc_answer')
 def handle_webrtc_answer(data):
-    if session.get('authenticated') and client_pc_sid: emit('webrtc_answer', data, room=client_pc_sid)
+    if session.get('authenticated') and client_pc_sid:
+        emit('webrtc_answer', data, room=client_pc_sid)
+
 @socketio.on('webrtc_ice_candidate')
 def handle_webrtc_ice_candidate(data):
-    if request.sid == client_pc_sid: emit('webrtc_ice_candidate', data, broadcast=True, include_self=False)
-    elif session.get('authenticated') and client_pc_sid: emit('webrtc_ice_candidate', data, room=client_pc_sid)
+    if request.sid == client_pc_sid:
+        emit('webrtc_ice_candidate', data, broadcast=True, include_self=False)
+    elif session.get('authenticated') and client_pc_sid:
+        emit('webrtc_ice_candidate', data, room=client_pc_sid)
+
 @socketio.on('set_injection_text')
 def handle_set_injection_text(data):
     if not session.get('authenticated'): return
     if client_pc_sid:
-        logger.info(f"Sending text to client {client_pc_sid}")
         emit('receive_injection_text', data, room=client_pc_sid)
         emit('text_injection_ack', {'status': 'success'}, room=request.sid)
     else:
