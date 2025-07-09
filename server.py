@@ -81,7 +81,7 @@ def logout():
     session.pop('authenticated', None)
     return redirect(url_for('index'))
 
-# --- SocketIO Handlers ---
+# --- SocketIO Event Handlers ---
 @socketio.on('connect')
 def handle_connect():
     if session.get('authenticated'):
@@ -89,6 +89,8 @@ def handle_connect():
 
 @socketio.on('disconnect')
 def handle_disconnect():
+    # ** THE FIX IS HERE **
+    global client_pc_sid
     if request.sid == client_pc_sid:
         logger.warning("Remote PC disconnected.")
         client_pc_sid = None
@@ -100,11 +102,14 @@ def handle_disconnect():
 
 @socketio.on('register_client')
 def handle_register_client(data):
+    # ** AND HERE **
     global client_pc_sid
     if data.get('token') == ACCESS_PASSWORD:
         client_pc_sid = request.sid
         logger.info(f"Remote PC registered: {client_pc_sid}")
         emit('client_ready', broadcast=True)
+    else:
+        logger.warning(f"Failed registration attempt from SID {request.sid}")
 
 @socketio.on('controller_ready')
 def handle_controller_ready():
@@ -115,22 +120,18 @@ def handle_controller_ready():
 # --- Universal Relay Handlers ---
 @socketio.on('webrtc_offer')
 def handle_webrtc_offer(data):
-    # Relay offer from client to a specific controller
     if request.sid == client_pc_sid and 'to_sid' in data:
         emit('webrtc_offer', {'offer': data['offer']}, room=data['to_sid'])
 
 @socketio.on('webrtc_answer')
 def handle_webrtc_answer(data):
-    # Relay answer from a controller back to the client
     if client_pc_sid:
         emit('webrtc_answer', {'answer': data['answer'], 'from_sid': request.sid}, room=client_pc_sid)
 
 @socketio.on('webrtc_ice_candidate')
 def handle_webrtc_ice_candidate(data):
-    # Relay ICE from controller to client
     if client_pc_sid and 'from_sid' not in data:
         emit('webrtc_ice_candidate', {'candidate': data['candidate'], 'from_sid': request.sid}, room=client_pc_sid)
-    # Relay ICE from client to controller
     elif 'to_sid' in data:
         emit('webrtc_ice_candidate', {'candidate': data['candidate']}, room=data['to_sid'])
 
@@ -139,6 +140,7 @@ def handle_webrtc_ice_candidate(data):
 def handle_control_command(data):
     if client_pc_sid:
         emit('command', data, room=client_pc_sid)
+
 @socketio.on('set_injection_text')
 def handle_set_injection_text(data):
     if client_pc_sid:
