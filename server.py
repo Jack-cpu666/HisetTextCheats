@@ -44,7 +44,7 @@ ICE_SERVERS = [
 # --- Flask App Setup ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*", max_http_buffer_size=50000000)  # 50MB max for screenshots
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*", max_http_buffer_size=100000000)  # 100MB max for ultra high quality screenshots
 
 # --- Global State ---
 client_pc_sid = None
@@ -145,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
     screenshotBtn.addEventListener('click', () => {
         if (socket.connected) {
             socket.emit('request_screenshot');
-            showScreenshotStatus('Requesting screenshot...');
+            showScreenshotStatus('Requesting ultra high-quality screenshot...');
         }
     });
     
@@ -155,7 +155,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 data: data.screenshot,
                 timestamp: data.timestamp
             });
-            showScreenshotStatus('Screenshot captured!', 2000);
+            showScreenshotStatus('Ultra high-quality screenshot captured!', 2000);
         } else {
             showScreenshotStatus('Failed to capture screenshot', 3000);
         }
