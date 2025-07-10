@@ -104,6 +104,11 @@ document.addEventListener('DOMContentLoaded', () => {
         reconnectionAttempts: Infinity,
         timeout: 20000,
         transports: ['websocket']
+    socket.on('controller_ready', () => {
+        if (controlsDisabled.screenshot_only) {
+            updateStatus('status-connected', 'Screenshot Only Mode - Client Connected');
+            hasRemoteClient = true;
+        }
     });
     
     const body = document.body; const screenViewArea = document.getElementById('screen-view-area'); const screenVideo = document.getElementById('screen-video'); const statusText = document.getElementById('status-text'); const statusDot = document.getElementById('status-dot'); const toggleTextModeBtn = document.getElementById('toggle-text-mode'); const injectionTextarea = document.getElementById('injection-textarea'); const sendTextBtn = document.getElementById('send-text-button'); const injectionStatus = document.getElementById('injection-status');
@@ -135,12 +140,18 @@ document.addEventListener('DOMContentLoaded', () => {
     
     function updateQualityIndicator(quality, latency) {
         qualityIndicator.style.display = 'block';
-        qualityIndicator.textContent = `Quality: ${quality} | Latency: ${latency}ms`;
+        const fps = quality === 'high' ? '10fps' : quality === 'medium' ? '7fps' : '5fps';
+        qualityIndicator.textContent = `Quality: ${quality} (${fps}) | Latency: ${latency}ms`;
         qualityIndicator.style.backgroundColor = quality === 'high' ? 'rgba(0,128,0,0.8)' : quality === 'medium' ? 'rgba(255,165,0,0.8)' : 'rgba(255,0,0,0.8)';
     }
     
     function updateControlOverlay() {
-        if (controlsDisabled.screenshot_only || (controlsDisabled.keyboard && controlsDisabled.mouse)) {
+        if (controlsDisabled.screenshot_only) {
+            controlDisabledOverlay.textContent = 'Screenshot Only Mode';
+            controlDisabledOverlay.style.display = 'flex';
+            screenVideo.style.cursor = 'not-allowed';
+        } else if (controlsDisabled.keyboard && controlsDisabled.mouse) {
+            controlDisabledOverlay.textContent = 'Controls Disabled';
             controlDisabledOverlay.style.display = 'flex';
             screenVideo.style.cursor = 'not-allowed';
         } else if (controlsDisabled.mouse) {
@@ -174,6 +185,19 @@ document.addEventListener('DOMContentLoaded', () => {
         screenshotOnlyToggle.classList.toggle('active');
         socket.emit('set_control_mode', { mode: 'screenshot_only', value: controlsDisabled.screenshot_only });
         updateControlOverlay();
+        
+        // Stop or restart video feed based on screenshot-only mode
+        if (controlsDisabled.screenshot_only) {
+            // Stop the video feed
+            closeConnection();
+            updateStatus('status-connected', 'Screenshot Only Mode');
+        } else {
+            // Restart the video feed only if we're connected
+            if (socket.connected) {
+                updateStatus('status-connecting', 'Reconnecting video...');
+                socket.emit('controller_ready');
+            }
+        }
     });
     
     keyboardToggle.addEventListener('click', () => {
@@ -341,6 +365,32 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 2000);
     }
     
+    socket.on('control_mode_update', (data) => {
+        // Sync control modes from server
+        if (data.mode in controlsDisabled) {
+            controlsDisabled[data.mode] = data.value;
+            
+            // Update UI buttons
+            if (data.mode === 'screenshot_only') {
+                screenshotOnlyToggle.classList.toggle('active', data.value);
+                updateControlOverlay();
+                
+                if (data.value) {
+                    closeConnection();
+                    updateStatus('status-connected', 'Screenshot Only Mode');
+                }
+            } else if (data.mode === 'keyboard_disabled') {
+                keyboardToggle.classList.toggle('active', data.value);
+                keyboardToggle.textContent = data.value ? '🎹 Enable' : '🎹 Disable';
+            } else if (data.mode === 'mouse_disabled') {
+                mouseToggle.classList.toggle('active', data.value);
+                mouseToggle.textContent = data.value ? '🖱️ Enable' : '🖱️ Disable';
+            }
+            
+            updateControlOverlay();
+        }
+    });
+    
     socket.on('connect', () => { 
         updateStatus('status-connecting', 'Server connected...');
         console.log("Connected to server, requesting config.");
@@ -350,6 +400,13 @@ document.addEventListener('DOMContentLoaded', () => {
     socket.on('webrtc_config', (config) => {
         iceServers = config.iceServers;
         console.log("Received WebRTC config:", iceServers);
+        socket.on('controller_ready', () => {
+        // Don't request video if in screenshot-only mode
+        if (controlsDisabled.screenshot_only) {
+            updateStatus('status-connected', 'Screenshot Only Mode');
+            return;
+        }
+        
         socket.emit('controller_ready');
     });
 
@@ -365,6 +422,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     socket.on('webrtc_offer', async (data) => {
+        // Don't process WebRTC offer if in screenshot-only mode
+        if (controlsDisabled.screenshot_only) {
+            console.log("Ignoring WebRTC offer - Screenshot Only mode is active");
+            return;
+        }
+        
         try {
             console.log("Received WebRTC offer:", data.offer);
             await createPeerConnection();
@@ -520,6 +583,10 @@ def handle_request_webrtc_config():
     if session.get('authenticated'):
         logger.info(f"Controller {request.sid} requested WebRTC config.")
         emit('webrtc_config', {'iceServers': ICE_SERVERS})
+        
+        # Send current control modes to sync state
+        for mode, value in control_modes.items():
+            emit('control_mode_update', {'mode': mode, 'value': value})
 
 @socketio.on('controller_ready')
 def handle_controller_ready():
@@ -536,6 +603,11 @@ def handle_set_control_mode(data):
         if mode in control_modes:
             control_modes[mode] = value
             logger.info(f"Control mode {mode} set to {value}")
+            
+            # Broadcast to all authenticated controllers to keep them in sync
+            emit('control_mode_update', {'mode': mode, 'value': value}, broadcast=True, include_self=True)
+            
+            # Also inform the client
             if client_pc_sid:
                 emit('control_mode_update', {'mode': mode, 'value': value}, room=client_pc_sid)
 
