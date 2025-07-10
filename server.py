@@ -11,16 +11,13 @@ from flask import Flask, request, session, redirect, url_for, render_template_st
 from flask_socketio import SocketIO, emit
 from io import BytesIO
 
-# --- Logging Setup ---
 log_format = '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
 logging.basicConfig(level=logging.INFO, format=log_format, stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
-# --- Configuration ---
 SECRET_KEY = os.environ.get('FLASK_SECRET_KEY', 'default_secret_key_for_local_dev')
 ACCESS_PASSWORD = os.environ.get('REMOTE_ACCESS_PASSWORD', '1')
 
-# --- WebRTC Configuration (Single Source of Truth) ---
 ICE_SERVERS = [
     {'urls': 'stun:stun.l.google.com:19302'},
     {'urls': 'stun:stun1.l.google.com:19302'},
@@ -41,31 +38,25 @@ ICE_SERVERS = [
     },
 ]
 
-# --- Flask App Setup ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
 socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*", max_http_buffer_size=100000000, ping_timeout=120, ping_interval=30)
 
-# --- Global State ---
 client_pc_sid = None
 screenshots_storage = {}
-# Control mode states
 control_modes = {
     'screenshot_only': False,
     'keyboard_disabled': False,
     'mouse_disabled': False
 }
-# Connection quality tracking
 connection_quality = {
     'latency': 0,
-    'quality_mode': 'high'  # 'high', 'medium', 'low'
+    'quality_mode': 'high'
 }
 
-# --- Authentication ---
 def check_auth(password):
     return password == ACCESS_PASSWORD
 
-# --- HTML Templates ---
 LOGIN_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -212,8 +203,6 @@ INTERFACE_HTML = """
         const screenshotFull = document.getElementById('screenshot-full');
         const qualityIndicator = document.getElementById('quality-indicator');
         const controlDisabledOverlay = document.getElementById('control-disabled-overlay');
-        
-        // Control toggles
         const screenshotOnlyToggle = document.getElementById('screenshot-only-toggle');
         const keyboardToggle = document.getElementById('keyboard-toggle');
         const mouseToggle = document.getElementById('mouse-toggle');
@@ -236,7 +225,7 @@ INTERFACE_HTML = """
         function updateQualityIndicator(quality, latency) {
             qualityIndicator.style.display = 'block';
             const fps = quality === 'high' ? '10fps' : quality === 'medium' ? '7fps' : '5fps';
-            qualityIndicator.textContent = `Quality: ${quality} (${fps}) | Latency: ${latency}ms`;
+            qualityIndicator.textContent = `Quality: ${quality} | Latency: ${latency}ms`;
             qualityIndicator.style.backgroundColor = quality === 'high' ? 'rgba(0,128,0,0.8)' : quality === 'medium' ? 'rgba(255,165,0,0.8)' : 'rgba(255,0,0,0.8)';
         }
         
@@ -273,38 +262,19 @@ INTERFACE_HTML = """
             setTimeout(() => { screenshotStatus.style.display = 'none'; }, duration);
         }
         
-        // Control mode toggles
         screenshotOnlyToggle.addEventListener('click', () => {
             controlsDisabled.screenshot_only = !controlsDisabled.screenshot_only;
-            screenshotOnlyToggle.classList.toggle('active');
             socket.emit('set_control_mode', { mode: 'screenshot_only', value: controlsDisabled.screenshot_only });
-            updateControlOverlay();
-            
-            if (controlsDisabled.screenshot_only) {
-                closeConnection();
-                updateStatus('status-connected', 'Screenshot Only Mode');
-            } else {
-                if (socket.connected && hasRemoteClient) {
-                    updateStatus('status-connecting', 'Reconnecting video...');
-                    socket.emit('controller_ready');
-                }
-            }
         });
         
         keyboardToggle.addEventListener('click', () => {
             controlsDisabled.keyboard = !controlsDisabled.keyboard;
-            keyboardToggle.classList.toggle('active');
-            keyboardToggle.textContent = controlsDisabled.keyboard ? '🎹 Enable' : '🎹 Disable';
             socket.emit('set_control_mode', { mode: 'keyboard_disabled', value: controlsDisabled.keyboard });
-            updateControlOverlay();
         });
         
         mouseToggle.addEventListener('click', () => {
             controlsDisabled.mouse = !controlsDisabled.mouse;
-            mouseToggle.classList.toggle('active');
-            mouseToggle.textContent = controlsDisabled.mouse ? '🖱️ Enable' : '🖱️ Disable';
             socket.emit('set_control_mode', { mode: 'mouse_disabled', value: controlsDisabled.mouse });
-            updateControlOverlay();
         });
         
         window.closeScreenshotViewer = function(event) {
@@ -316,7 +286,6 @@ INTERFACE_HTML = """
         window.downloadScreenshot = function(event) {
             event.stopPropagation();
             if (!currentScreenshotData) return;
-            
             const link = document.createElement('a');
             link.href = currentScreenshotData.data;
             link.download = `screenshot_${currentScreenshotData.timestamp}.png`;
@@ -325,7 +294,6 @@ INTERFACE_HTML = """
         
         function addScreenshotToGallery(screenshotData) {
             screenshots.push(screenshotData);
-            
             const thumb = document.createElement('img');
             thumb.className = 'screenshot-thumb';
             thumb.src = screenshotData.data;
@@ -335,10 +303,8 @@ INTERFACE_HTML = """
                 screenshotFull.src = screenshotData.data;
                 screenshotViewer.style.display = 'flex';
             };
-            
             screenshotGallery.appendChild(thumb);
             screenshotGallery.classList.add('has-screenshots');
-            
             if (screenshots.length > 10) {
                 screenshots.shift();
                 screenshotGallery.removeChild(screenshotGallery.firstChild);
@@ -384,26 +350,19 @@ INTERFACE_HTML = """
                 bundlePolicy: 'max-bundle',
                 rtcpMuxPolicy: 'require'
             };
-            console.log("Creating PeerConnection with config:", pcConfig);
             pc = new RTCPeerConnection(pcConfig);
-            
             pc.onicecandidate = e => { 
                 if (e.candidate) { 
-                    console.log("Sending ICE candidate:", e.candidate); 
                     socket.emit('webrtc_ice_candidate', { candidate: e.candidate.toJSON() }); 
                 } 
             };
-            
             pc.ontrack = e => { 
                 if (screenVideo.srcObject !== e.streams[0]) { 
-                    console.log("Received remote stream"); 
                     screenVideo.srcObject = e.streams[0]; 
                     screenViewArea.style.backgroundColor = 'transparent';
                 } 
             };
-            
             pc.onconnectionstatechange = () => { 
-                console.log("Connection state:", pc.connectionState); 
                 if(pc.connectionState === 'connected') {
                     updateStatus('status-connected', 'Remote PC Connected');
                     startConnectionMonitoring();
@@ -424,7 +383,6 @@ INTERFACE_HTML = """
         
         function startConnectionMonitoring() {
             if (connectionCheckInterval) clearInterval(connectionCheckInterval);
-            
             connectionCheckInterval = setInterval(() => {
                 if (pc && pc.connectionState === 'connected') {
                     pc.getStats().then(stats => {
@@ -442,14 +400,14 @@ INTERFACE_HTML = """
         socket.on('control_mode_update', (data) => {
             if (data.mode in controlsDisabled) {
                 controlsDisabled[data.mode] = data.value;
-                
                 if (data.mode === 'screenshot_only') {
                     screenshotOnlyToggle.classList.toggle('active', data.value);
-                    updateControlOverlay();
-                    
                     if (data.value) {
                         closeConnection();
                         updateStatus('status-connected', 'Screenshot Only Mode');
+                    } else if (socket.connected && hasRemoteClient) {
+                         updateStatus('status-connecting', 'Reconnecting video...');
+                         socket.emit('controller_ready');
                     }
                 } else if (data.mode === 'keyboard_disabled') {
                     keyboardToggle.classList.toggle('active', data.value);
@@ -458,27 +416,25 @@ INTERFACE_HTML = """
                     mouseToggle.classList.toggle('active', data.value);
                     mouseToggle.textContent = data.value ? '🖱️ Enable' : '🖱️ Disable';
                 }
-                
                 updateControlOverlay();
             }
         });
         
         socket.on('connect', () => { 
             updateStatus('status-connecting', 'Server connected...');
-            console.log("Connected to server, requesting config.");
             socket.emit('request_webrtc_config');
         });
         
         socket.on('webrtc_config', (config) => {
             iceServers = config.iceServers;
-            console.log("Received WebRTC config:", iceServers);
         });
 
-        socket.on('controller_ready', () => {
+        socket.on('client_available', () => {
+            hasRemoteClient = true;
             if (controlsDisabled.screenshot_only) {
-                updateStatus('status-connected', 'Screenshot Only Mode - Client Connected');
-                hasRemoteClient = true;
+                updateStatus('status-connected', 'Screenshot Only Mode');
             } else {
+                updateStatus('status-connecting', 'Client available, starting video...');
                 socket.emit('controller_ready');
             }
         });
@@ -497,19 +453,12 @@ INTERFACE_HTML = """
         });
         
         socket.on('webrtc_offer', async (data) => {
-            if (controlsDisabled.screenshot_only) {
-                console.log("Ignoring WebRTC offer - Screenshot Only mode is active");
-                return;
-            }
-            
+            if (controlsDisabled.screenshot_only) return;
             try {
-                console.log("Received WebRTC offer:", data.offer);
                 await createPeerConnection();
                 await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-                console.log("Set remote description successfully. Creating answer.");
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
-                console.log("Set local description successfully. Sending answer.");
                 socket.emit('webrtc_answer', { answer: pc.localDescription.toJSON() });
             } catch (e) {
                 console.error("Error handling WebRTC offer:", e);
@@ -519,7 +468,6 @@ INTERFACE_HTML = """
 
         socket.on('webrtc_ice_candidate', (data) => {
             if (pc && data.candidate) {
-                console.log("Received ICE candidate:", data.candidate);
                 pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => console.error("Error adding ICE candidate:", e));
             }
         });
@@ -545,50 +493,42 @@ INTERFACE_HTML = """
             const c = getRemoteCoords(e); 
             if (c) sendControl({ action: 'move', ...c }); 
         }); 
-        
         screenViewArea.addEventListener('click', e => { 
             const c = getRemoteCoords(e); 
             if (c) sendControl({ action: 'click', button: 'left', ...c }); 
         }); 
-        
         screenViewArea.addEventListener('contextmenu', e => { 
             e.preventDefault(); 
             const c = getRemoteCoords(e); 
             if (c) sendControl({ action: 'click', button: 'right', ...c }); 
         }); 
-        
         screenViewArea.addEventListener('wheel', e => { 
             e.preventDefault(); 
             const dY = e.deltaY > 0 ? 1 : (e.deltaY < 0 ? -1 : 0); 
             const dX = e.deltaX > 0 ? 1 : (e.deltaX < 0 ? -1 : 0); 
             if (dY || dX) sendControl({ action: 'scroll', dx: dX, dy: dY }); 
         });
-        
         document.body.addEventListener('keydown', e => { 
             if(body.classList.contains('text-mode') && e.target === injectionTextarea) return; 
             e.preventDefault(); 
             sendControl({ action: 'keydown', key: e.key, code: e.code }); 
         });
-        
         document.body.addEventListener('keyup', e => { 
             if(body.classList.contains('text-mode') && e.target === injectionTextarea) return; 
             e.preventDefault(); 
             sendControl({ action: 'keyup', key: e.key, code: e.code }); 
         });
-        
         toggleTextModeBtn.addEventListener('click', () => { 
             body.classList.toggle('text-mode'); 
             toggleTextModeBtn.classList.toggle('active'); 
             if (body.classList.contains('text-mode')) injectionTextarea.focus(); 
             else document.body.focus(); 
         });
-        
         sendTextBtn.addEventListener('click', () => { 
             const text = injectionTextarea.value; 
             socket.emit('set_injection_text', { text: text, override: true }); 
             injectionStatus.textContent = "Sending (overrides previous)..."; 
         });
-        
         socket.on('text_injection_ack', (data) => { 
             if (data.status === 'success') { 
                 injectionStatus.textContent = "Text saved on client! (Previous text overridden)"; 
@@ -603,7 +543,6 @@ INTERFACE_HTML = """
 </html>
 """
 
-# --- Flask Routes ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -627,7 +566,6 @@ def logout():
     session.pop('authenticated', None)
     return redirect(url_for('index'))
 
-# --- SocketIO Event Handlers ---
 @socketio.on('connect')
 def handle_connect():
     if session.get('authenticated'):
@@ -651,7 +589,7 @@ def handle_register_client(data):
     if data.get('token') == ACCESS_PASSWORD:
         client_pc_sid = request.sid
         logger.info(f"Remote PC registered: {client_pc_sid}")
-        emit('controller_ready', broadcast=True, include_self=False)
+        emit('client_available', broadcast=True, include_self=False)
     else:
         logger.warning(f"Failed registration attempt from SID {request.sid}")
 
@@ -660,9 +598,10 @@ def handle_request_webrtc_config():
     if session.get('authenticated'):
         logger.info(f"Controller {request.sid} requested WebRTC config.")
         emit('webrtc_config', {'iceServers': ICE_SERVERS})
-        
         for mode, value in control_modes.items():
             emit('control_mode_update', {'mode': mode, 'value': value})
+        if client_pc_sid:
+            emit('client_available')
 
 @socketio.on('controller_ready')
 def handle_controller_ready():
@@ -678,44 +617,31 @@ def handle_set_control_mode(data):
         if mode in control_modes:
             control_modes[mode] = value
             logger.info(f"Control mode {mode} set to {value}")
-            
             emit('control_mode_update', {'mode': mode, 'value': value}, broadcast=True, include_self=True)
-            
-            if client_pc_sid:
-                emit('control_mode_update', {'mode': mode, 'value': value}, room=client_pc_sid)
 
 @socketio.on('report_latency')
 def handle_report_latency(data):
     if session.get('authenticated'):
         latency = data.get('latency', 0)
         connection_quality['latency'] = latency
-        
         if latency < 50:
             quality_mode = 'high'
         elif latency < 150:
             quality_mode = 'medium'
         else:
             quality_mode = 'low'
-        
         if quality_mode != connection_quality['quality_mode']:
             connection_quality['quality_mode'] = quality_mode
             if client_pc_sid:
                 emit('quality_mode_change', {'quality_mode': quality_mode}, room=client_pc_sid)
-        
-        emit('connection_quality', {
-            'latency': latency,
-            'quality_mode': quality_mode
-        }, room=request.sid)
+        emit('connection_quality', { 'latency': latency, 'quality_mode': quality_mode }, room=request.sid)
 
 @socketio.on('request_screenshot')
 def handle_request_screenshot(data):
     if session.get('authenticated') and client_pc_sid:
         quality = data.get('quality', 'ultra')
         logger.info(f"Controller {request.sid} requested {quality} screenshot")
-        emit('capture_screenshot', {
-            'requester_sid': request.sid,
-            'quality': quality
-        }, room=client_pc_sid)
+        emit('capture_screenshot', {'requester_sid': request.sid, 'quality': quality }, room=client_pc_sid)
 
 @socketio.on('screenshot_data')
 def handle_screenshot_data(data):
@@ -723,25 +649,10 @@ def handle_screenshot_data(data):
         requester_sid = data.get('requester_sid')
         screenshot_data = data.get('screenshot')
         quality = data.get('quality', 'ultra')
-        
         if requester_sid and screenshot_data:
             timestamp = datetime.now().isoformat()
-            
-            screenshot_id = f"{requester_sid}_{timestamp}"
-            screenshots_storage[screenshot_id] = {
-                'data': screenshot_data,
-                'timestamp': timestamp,
-                'quality': quality
-            }
-            
             logger.info(f"Received {quality} screenshot from client for {requester_sid}")
-            
-            emit('screenshot_received', {
-                'status': 'success',
-                'screenshot': screenshot_data,
-                'timestamp': timestamp,
-                'quality': quality
-            }, room=requester_sid)
+            emit('screenshot_received', { 'status': 'success', 'screenshot': screenshot_data, 'timestamp': timestamp, 'quality': quality }, room=requester_sid)
 
 @socketio.on('webrtc_offer')
 def handle_webrtc_offer(data):
@@ -766,12 +677,10 @@ def handle_webrtc_ice_candidate(data):
 def handle_control_command(data):
     if client_pc_sid and not control_modes['screenshot_only']:
         action = data.get('action')
-        
         if action in ['keydown', 'keyup'] and control_modes['keyboard_disabled']:
             return
         if action in ['move', 'click', 'scroll'] and control_modes['mouse_disabled']:
             return
-            
         emit('command', data, room=client_pc_sid)
 
 @socketio.on('set_injection_text')
